@@ -29,7 +29,7 @@ pip install numpy matplotlib
 
 Start Jupyter and open the provided notebook:
 ```bash
-jupyter notebook GLSVLSI_2025.ipynb
+jupyter notebook ICPP_2025.ipynb
 
 ```
 
