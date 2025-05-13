@@ -25,9 +25,9 @@ class QCloud:
 
         # Mapping strategies to functions
         self.allocation_strategies = {
-            "fast": self.fast_allocate_large_job,
-            "smart": self.smart_allocate_large_job, 
-            "balance": self.balanced_allocate_large_job, 
+            "speed": self.fast_allocate_large_job,
+            "fidelity": self.smart_allocate_large_job, 
+            "fair": self.balanced_allocate_large_job, 
             "rlbase": self.rl_allocate_large_job
         }
 
@@ -166,6 +166,7 @@ class QCloud:
             single_qubit_fidelity = (1 - device.avg_single_qubit_error) ** job.depth             
             readout_fidelity = (1 - device.avg_readout_error) ** ((job.num_qubits // len(allocated_devices)) ** 0.5 ) 
             two_qubit_fidelity = (1 - device.avg_two_qubit_error) ** ((job.two_qubits // len(allocated_devices)) ** 0.25 )
+            two_qubit_fidelity = 1
             device_fidelity = single_qubit_fidelity * readout_fidelity * two_qubit_fidelity
             fidelities.append(device_fidelity)
 
@@ -257,6 +258,7 @@ class QCloud:
             single_qubit_fidelity = (1 - device.avg_single_qubit_error) ** job.depth
             readout_fidelity = (1 - device.avg_readout_error) ** ((job.num_qubits // len(allocated_devices)) ** 0.5 )
             two_qubit_fidelity = (1 - device.avg_two_qubit_error) ** ((job.two_qubits // len(allocated_devices)) ** 0.25 )
+            two_qubit_fidelity = 1
             device_fidelity = single_qubit_fidelity * readout_fidelity * two_qubit_fidelity
             fidelities.append(device_fidelity)
 
@@ -335,6 +337,7 @@ class QCloud:
             single_qubit_fidelity = (1 - device.avg_single_qubit_error) ** job.depth
             readout_fidelity = (1 - device.avg_readout_error) ** ((job.num_qubits // len(allocated_devices)) ** 0.5)
             two_qubit_fidelity = (1 - device.avg_two_qubit_error) ** ((job.two_qubits // len(allocated_devices)) ** 0.25)
+            two_qubit_fidelity = 1
             device_fidelity = single_qubit_fidelity * readout_fidelity * two_qubit_fidelity
             fidelities.append(device_fidelity)
 
@@ -362,7 +365,7 @@ class QCloud:
 
         # Load your trained RL model.
         # Consider loading this once (e.g., during __init__) and reusing it for performance.
-        model = PPO.load("qcloud_ppo_model")
+        model = PPO.load("qcloud_ppo_model-new")
 
         # Get the agent's action.
         action, _ = model.predict(state, deterministic=True)
@@ -386,35 +389,44 @@ class QCloud:
             if allocated_qubits > 0:
                 # For asynchronous operation in a simulation, consider yielding this request.
                 with device.resource.request(priority=2) as req:
-                    device.container.get(allocated_qubits)
+                    while device.container.level < allocated_qubits:
+                        if self.printlog:
+                            print(f"{self.env.now:.2f}: Waiting for {allocated_qubits} qubits on {device.name} (available: {device.container.level})")
+                        yield self.env.timeout(1)
+
+                    # 3. Actually take the qubits (will now succeed immediately)
+                    yield device.container.get(allocated_qubits)
+
+                    # 4. Record the allocation
                     allocated_devices.append((device, allocated_qubits))
                     if self.printlog:
-                        print(f"RL mode – Job #{job.job_id} allocated {allocated_qubits} qubits on {device.name}.")
+                        print(f"{self.env.now:.2f}: RL mode – Job #{job.job_id} allocated {allocated_qubits} qubits on {device.name}.")
                     self.job_records_manager.log_job_event(job.job_id, 'devc_proc', round(self.env.now, 4))
 
-        # Continue with subsequent processing (inter-device communication, releasing resources, fidelity computation).
-        # This example returns the allocated_devices for demonstration.
-                # Process inter-device communication and processing just like in fast/smart
+        # for d in devices: 
+        #     print(f"device name: {d.name}, qubit available: {d.container.level}")
+                    
         for i in range(len(allocated_devices) - 1):
-            device1, q1, _, _ = allocated_devices[i]
-            device2, q2, _, _ = allocated_devices[i + 1]
+            device1, q1 = allocated_devices[i]
+            device2, q2 = allocated_devices[i + 1]
             yield self.env.process(self.device_comm(job, device1, device2, q1 + q2))
 
-        process_times = [self.calculate_process_time(device, job) for device, _, _, _ in allocated_devices]
+        process_times = [self.calculate_process_time(device, job) for device, _ in allocated_devices]
         yield self.env.timeout(max(process_times))
 
-        for device, allocated_qubits, _, _ in allocated_devices:
+        for device, allocated_qubits in allocated_devices:
             yield device.container.put(allocated_qubits)
             self.job_records_manager.log_job_event(job.job_id, 'devc_finish', round(self.env.now, 4))
             if self.printlog:
-                print(f"{self.env.now:.2f}: Balanced mode – Job #{job.job_id} completed on {device.name}.")
+                print(f"{self.env.now:.2f}: Job #{job.job_id} completed on {device.name}.")
 
         # Fidelity computations (same as before)
         fidelities = []
-        for device, _, _, _ in allocated_devices:
+        for device, _ in allocated_devices:
             single_qubit_fidelity = (1 - device.avg_single_qubit_error) ** job.depth
             readout_fidelity = (1 - device.avg_readout_error) ** ((job.num_qubits // len(allocated_devices)) ** 0.5)
             two_qubit_fidelity = (1 - device.avg_two_qubit_error) ** ((job.two_qubits // len(allocated_devices)) ** 0.25)
+            two_qubit_fidelity = 1 # supressing two qubits fidelity
             device_fidelity = single_qubit_fidelity * readout_fidelity * two_qubit_fidelity
             fidelities.append(device_fidelity)
 
